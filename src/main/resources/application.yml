@@ -1,0 +1,82 @@
+spring:
+  application:
+    name: ${OTEL_SERVICE_NAME:aggregator}   # also the OpenTelemetry service.name
+  threads:
+    virtual:
+      enabled: true
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://localhost:4318/v1/metrics}
+        step: 30s
+
+logging:
+  pattern:
+    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{correlationId:-}] "
+
+proxy:
+  connect-timeout: 2s
+  workflows:
+    order-flow:
+      match:
+        path: /api/orders/**
+        methods: [POST]
+      sync:                       # list order = call order
+        - name: validate
+          url: https://validator.internal/validate
+          method: POST
+          timeout: 2s
+        - name: enrich
+          url: https://enricher.internal/enrich
+          method: POST
+          timeout: 2s
+      async:
+        - name: billing
+          url: https://billing.internal/charge
+          method: POST
+          timeout: 5s
+        - name: inventory
+          url: https://inventory.internal/reserve
+          method: POST
+          timeout: 5s
+      on-async-failure: partial   # partial | fail
+
+    customer-flow:
+      match:
+        path: /api/customers/**
+        methods: [GET, POST]
+      sync:
+        - name: lookup
+          url: https://crm.internal/lookup
+          method: POST
+          timeout: 2s
+
+    catch-all:
+      match:
+        path: /**                 # methods omitted = all methods
+      sync:
+        - name: default-backend
+          url: https://default.internal
+          method: INHERIT
+          append-inbound-path: true
+          timeout: 5s

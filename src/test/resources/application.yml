@@ -1,0 +1,82 @@
+spring:
+  application:
+    name: aggregator-test
+  threads:
+    virtual:
+      enabled: true
+  web:
+    resources:
+      add-mappings: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  tracing:
+    sampling:
+      probability: 1.0
+
+proxy:
+  workflows:
+    order-flow:
+      match:
+        path: /api/orders/**
+        methods: [POST]
+      sync:
+        - name: validate
+          url: ${downstream.base-url}/validate
+          method: POST
+          timeout: 2s
+        - name: enrich
+          url: ${downstream.base-url}/enrich
+          method: POST
+          timeout: 2s
+          headers:
+            X-Static: fixed
+          forward-headers: [Authorization]
+      async:
+        - name: billing
+          url: ${downstream.base-url}/billing
+          method: POST
+          timeout: 2s
+        - name: inventory
+          url: ${downstream.base-url}/inventory
+          method: POST
+          timeout: 2s
+      on-async-failure: partial
+
+    strict-flow:
+      match:
+        path: /api/strict
+        methods: [POST]
+      async:
+        - name: billing
+          url: ${downstream.base-url}/billing
+          method: POST
+          timeout: 2s
+        - name: inventory
+          url: ${downstream.base-url}/inventory
+          method: POST
+          timeout: 2s
+      on-async-failure: fail
+
+    customer-flow:
+      match:
+        path: /api/customers/**
+        methods: [GET, POST]
+      sync:
+        - name: lookup
+          url: ${downstream.base-url}/lookup
+          method: POST
+          timeout: 500ms
+
+    catch-all:
+      match:
+        path: /**
+      sync:
+        - name: default-backend
+          url: ${downstream.base-url}/default
+          method: INHERIT
+          append-inbound-path: true
+          timeout: 2s
