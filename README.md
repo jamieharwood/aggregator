@@ -207,6 +207,7 @@ Set in `application.yml` or by environment variable.
 | `proxy.workflow-store.collection` | | `workflows` | Collection holding the workflows |
 | `proxy.workflow-store.refresh-interval` | `WORKFLOW_REFRESH_INTERVAL` | `30s` | How often workflows are reloaded; `0` reads them once at startup |
 | `proxy.connect-timeout` | | `2s` | TCP connect timeout for all downstream calls |
+| `otel.enabled` | `OTEL_ENABLED` | `false` | Export traces and metrics over OTLP; see Observability |
 | `server.port` | `SERVER_PORT` | `8080` | HTTP port |
 
 `/actuator/health` includes MongoDB. If MongoDB becomes unreachable the application keeps serving
@@ -216,6 +217,19 @@ with the workflows it has loaded, but health reports `DOWN`.
 
 The application is instrumented with OpenTelemetry through Spring Boot's OpenTelemetry starter and
 the Micrometer Observation API, exporting over OTLP/HTTP.
+
+### Switching it on
+
+Export is controlled by one switch in `application.yml`, and it is **off by default**:
+
+```yaml
+otel:
+  enabled: ${OTEL_ENABLED:false}
+```
+
+Set `OTEL_ENABLED=true` (or `otel.enabled: true`) to export traces and metrics. When the switch is
+off, nothing is exported and no collector is contacted. Trace and span IDs still appear in the logs,
+and `traceparent` is still sent downstream, so a caller's trace is not broken by the proxy.
 
 ### Traces
 
@@ -256,17 +270,25 @@ Every log line includes the trace ID, span ID and correlation ID. Each downstrea
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
+| `OTEL_ENABLED` | `false` | Switch for exporting traces and metrics |
 | `OTEL_SERVICE_NAME` | `aggregator` | Service name on traces and metrics |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://localhost:4318/v1/traces` | OTLP/HTTP traces endpoint |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://localhost:4318/v1/metrics` | OTLP/HTTP metrics endpoint |
 | `TRACING_SAMPLING_PROBABILITY` | `1.0` | Fraction of requests traced |
 
-If no collector is reachable the application still starts and serves requests; the exporters log an
-export failure and carry on.
+If the switch is on and no collector is reachable, the application still starts and serves requests;
+the exporters log an export failure and carry on.
 
 ### Viewing a trace locally
 
-`docker compose up -d` also starts an OpenTelemetry collector and Jaeger. Start the application, send a request, then open <http://localhost:16686>, choose the `aggregator`
+`docker compose up -d` also starts an OpenTelemetry collector and Jaeger. Start the application
+with export switched on:
+
+```bash
+OTEL_ENABLED=true ./gradlew bootRun
+```
+
+Then send a request, then open <http://localhost:16686>, choose the `aggregator`
 service and select **Find Traces**. Metrics are printed to the collector's log:
 
 ```bash
@@ -286,6 +308,7 @@ docker compose logs -f otel-collector
 - `ProxyIntegrationTest`: the running application against WireMock.
 - `TracingIntegrationTest`: span structure, using an in-memory span exporter.
 - `WorkflowReloadIntegrationTest`: changes in MongoDB take effect in the running application.
+- `OtelSwitchTest`: the `otel.enabled` switch turns trace and metric export on and off.
 - `StartupValidationTest`: invalid stored workflows stop the application from starting.
 
 The MongoDB tests run against an in-memory MongoDB (`mongo-java-server`), not a real server.
@@ -299,3 +322,8 @@ The MongoDB tests run against an in-memory MongoDB (`mongo-java-server`), not a 
   thread and is abandoned when its timeout expires, so the timeout bounds the whole call, body
   included.
 - `WorkflowExecutor` has no dependency on the servlet API.
+
+## Specification
+
+`PROMPT.md` holds the full specification this application was built from, written as a prompt for a
+coding agent.
