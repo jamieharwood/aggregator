@@ -110,8 +110,9 @@ class StartupValidationTest {
     private static ConfigurableApplicationContext start() {
         return new SpringApplicationBuilder(AggregatorApplication.class)
                 .web(WebApplicationType.NONE)
-                .properties("spring.mongodb.uri=" + uri, "spring.main.banner-mode=off")
-                .run();
+                .properties("spring.main.banner-mode=off")
+                // A command-line argument, so that it overrides the URI in application.yml.
+                .run("--spring.mongodb.uri=" + uri);
     }
 
     private static MongoCollection<Document> workflows() {
