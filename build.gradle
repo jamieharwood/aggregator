@@ -13,6 +13,10 @@ java {
     }
 }
 
+configurations {
+    mockitoAgent
+}
+
 repositories {
     mavenCentral()
 }
@@ -28,10 +32,12 @@ dependencies {
     testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
     testImplementation 'io.micrometer:micrometer-observation-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    mockitoAgent('org.mockito:mockito-core') { transitive = false }
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    jvmArgs "-javaagent:${configurations.mockitoAgent.asPath}", '-Xshare:off'
 }
 
 
