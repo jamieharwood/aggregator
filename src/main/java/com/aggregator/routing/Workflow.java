@@ -3,7 +3,7 @@ package com.aggregator.routing;
 import java.util.List;
 import java.util.Set;
 
-import com.aggregator.config.ProxyProperties.AsyncFailureMode;
+import com.aggregator.routing.WorkflowDefinition.AsyncFailureMode;
 
 import org.springframework.http.HttpMethod;
 import org.springframework.web.util.pattern.PathPattern;

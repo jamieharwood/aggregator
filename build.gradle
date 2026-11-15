@@ -21,10 +21,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+    implementation 'org.springframework.boot:spring-boot-starter-mongodb'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-opentelemetry-test'
     testImplementation 'org.wiremock:wiremock-standalone:3.13.2'
+    testImplementation 'de.bwaldvogel:mongo-java-server:1.47.0'
     testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
     testImplementation 'io.micrometer:micrometer-observation-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

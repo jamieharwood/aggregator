@@ -1,6 +1,18 @@
-# Local observability stack: the application exports OTLP to the collector on localhost:4318,
-# and the collector forwards traces to Jaeger (UI on http://localhost:16686).
+# Local dependencies.
+# - MongoDB holds the workflow definitions (seeded from mongo/init-workflows.js on first start).
+# - The application exports OTLP to the collector on localhost:4318, and the collector forwards
+#   traces to Jaeger (UI on http://localhost:16686).
 services:
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_DATABASE: aggregator
+    volumes:
+      - ./mongo/init-workflows.js:/docker-entrypoint-initdb.d/init-workflows.js:ro
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.165.0
     command: ["--config=/etc/otelcol/config.yaml"]
@@ -16,3 +28,6 @@ services:
     image: jaegertracing/jaeger:2.23.0
     ports:
       - "16686:16686" # Jaeger UI
+
+volumes:
+  mongo-data:

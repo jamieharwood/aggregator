@@ -4,6 +4,8 @@ spring:
   threads:
     virtual:
       enabled: true
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://localhost:27017/aggregator}
   web:
     resources:
       add-mappings: false
@@ -36,47 +38,6 @@ logging:
 
 proxy:
   connect-timeout: 2s
-  workflows:
-    order-flow:
-      match:
-        path: /api/orders/**
-        methods: [POST]
-      sync:                       # list order = call order
-        - name: validate
-          url: https://validator.internal/validate
-          method: POST
-          timeout: 2s
-        - name: enrich
-          url: https://enricher.internal/enrich
-          method: POST
-          timeout: 2s
-      async:
-        - name: billing
-          url: https://billing.internal/charge
-          method: POST
-          timeout: 5s
-        - name: inventory
-          url: https://inventory.internal/reserve
-          method: POST
-          timeout: 5s
-      on-async-failure: partial   # partial | fail
-
-    customer-flow:
-      match:
-        path: /api/customers/**
-        methods: [GET, POST]
-      sync:
-        - name: lookup
-          url: https://crm.internal/lookup
-          method: POST
-          timeout: 2s
-
-    catch-all:
-      match:
-        path: /**                 # methods omitted = all methods
-      sync:
-        - name: default-backend
-          url: https://default.internal
-          method: INHERIT
-          append-inbound-path: true
-          timeout: 5s
+  workflow-store:
+    collection: workflows       # one document per workflow; see README
+    refresh-interval: ${WORKFLOW_REFRESH_INTERVAL:30s}   # 0 disables reloading

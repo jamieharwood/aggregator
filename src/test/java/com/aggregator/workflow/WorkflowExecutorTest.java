@@ -13,7 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import com.aggregator.config.ProxyProperties.AsyncFailureMode;
+import com.aggregator.routing.WorkflowDefinition.AsyncFailureMode;
 import com.aggregator.routing.Endpoint;
 import com.aggregator.routing.Workflow;
 import io.micrometer.observation.ObservationRegistry;

@@ -9,7 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
-import com.aggregator.config.ProxyProperties.AsyncFailureMode;
+import com.aggregator.routing.WorkflowDefinition.AsyncFailureMode;
 import com.aggregator.routing.Endpoint;
 import com.aggregator.routing.Workflow;
 import com.aggregator.workflow.EndpointResult.Outcome;

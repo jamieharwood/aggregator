@@ -1,9 +1,9 @@
 package com.aggregator.workflow;
 
 import java.net.http.HttpClient;
-import java.time.Duration;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.aggregator.config.ProxyProperties;
+
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -18,10 +18,10 @@ public class RestClientDownstreamClient implements DownstreamClient {
 
     private final RestClient restClient;
 
-    public RestClientDownstreamClient(@Value("${proxy.connect-timeout:2s}") Duration connectTimeout) {
+    public RestClientDownstreamClient(ProxyProperties properties) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(connectTimeout)
+                .connectTimeout(properties.connectTimeout())
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.restClient = RestClient.builder()

@@ -2,77 +2,119 @@ package com.aggregator.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.aggregator.config.ProxyConfiguration;
-import com.aggregator.routing.InvalidProxyConfigurationException;
+import com.aggregator.AggregatorApplication;
+import com.aggregator.routing.InvalidWorkflowDefinitionException;
 import com.aggregator.routing.WorkflowRegistry;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import de.bwaldvogel.mongo.MongoServer;
+import de.bwaldvogel.mongo.backend.memory.MemoryBackend;
+import org.bson.Document;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
 
-/** Proves that invalid workflow configuration stops the application context from starting. */
+/** Proves that the application only starts when the workflows stored in MongoDB are valid. */
 class StartupValidationTest {
 
-    private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withUserConfiguration(ProxyConfiguration.class, WorkflowRegistry.class);
+    private static final String CATCH_ALL = """
+            { "_id": "catch-all", "match": { "path": "/**" },
+              "sync": [ { "name": "backend", "url": "http://backend", "method": "INHERIT" } ] }
+            """;
+
+    private static final String ORDERS = """
+            { "_id": "orders", "match": { "path": "/api/orders/**", "methods": ["POST"] },
+              "async": [ { "name": "billing", "url": "http://billing/charge", "method": "POST" } ] }
+            """;
+
+    private static MongoServer server;
+
+    private static MongoClient client;
+
+    private static String uri;
+
+    @BeforeAll
+    static void startMongo() {
+        server = new MongoServer(new MemoryBackend());
+        uri = "mongodb://localhost:" + server.bind().getPort() + "/startup-test";
+        client = MongoClients.create(uri);
+    }
+
+    @AfterAll
+    static void stopMongo() {
+        client.close();
+        server.shutdown();
+    }
+
+    @BeforeEach
+    void clear() {
+        workflows().deleteMany(new Document());
+    }
 
     @Test
-    void startsWithAValidConfiguration() {
-        runner.withPropertyValues(
-                        "proxy.workflows.orders.match.path=/api/orders/**",
-                        "proxy.workflows.orders.match.methods=POST",
-                        "proxy.workflows.orders.async[0].name=billing",
-                        "proxy.workflows.orders.async[0].url=http://billing/charge",
-                        "proxy.workflows.orders.async[0].method=POST",
-                        "proxy.workflows.orders.on-async-failure=fail",
-                        "proxy.workflows.catch-all.match.path=/**",
-                        "proxy.workflows.catch-all.sync[0].name=backend",
-                        "proxy.workflows.catch-all.sync[0].url=http://backend",
-                        "proxy.workflows.catch-all.sync[0].method=INHERIT",
-                        "proxy.workflows.catch-all.sync[0].append-inbound-path=true")
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(context.getBean(WorkflowRegistry.class).workflows()).hasSize(2);
-                });
+    void startsWithValidWorkflows() {
+        workflows().insertOne(Document.parse(CATCH_ALL));
+        workflows().insertOne(Document.parse(ORDERS));
+
+        try (ConfigurableApplicationContext context = start()) {
+            assertThat(context.getBean(WorkflowRegistry.class).workflows()).hasSize(2);
+        }
     }
 
     @Test
     void failsToStartWithoutACatchAll() {
-        runner.withPropertyValues(
-                        "proxy.workflows.orders.match.path=/api/orders/**",
-                        "proxy.workflows.orders.sync[0].name=validate",
-                        "proxy.workflows.orders.sync[0].url=http://validator/validate",
-                        "proxy.workflows.orders.sync[0].method=POST")
-                .run(context -> assertThat(context).hasFailed().getFailure()
-                        .hasRootCauseInstanceOf(InvalidProxyConfigurationException.class)
-                        .rootCause().hasMessageContaining("catch-all workflow is mandatory"));
+        workflows().insertOne(Document.parse(ORDERS));
+
+        assertStartupFailsWith("catch-all workflow is mandatory");
+    }
+
+    @Test
+    void failsToStartWithAnEmptyCollection() {
+        assertStartupFailsWith("catch-all workflow is mandatory");
     }
 
     @Test
     void failsToStartWhenTwoWorkflowsShareAPathAndMethod() {
-        runner.withPropertyValues(
-                        "proxy.workflows.a.match.path=/api/items",
-                        "proxy.workflows.a.match.methods=GET,POST",
-                        "proxy.workflows.a.sync[0].name=one",
-                        "proxy.workflows.a.sync[0].url=http://one",
-                        "proxy.workflows.a.sync[0].method=POST",
-                        "proxy.workflows.b.match.path=/api/items",
-                        "proxy.workflows.b.match.methods=POST",
-                        "proxy.workflows.b.sync[0].name=two",
-                        "proxy.workflows.b.sync[0].url=http://two",
-                        "proxy.workflows.b.sync[0].method=POST",
-                        "proxy.workflows.catch-all.match.path=/**",
-                        "proxy.workflows.catch-all.sync[0].name=backend",
-                        "proxy.workflows.catch-all.sync[0].url=http://backend",
-                        "proxy.workflows.catch-all.sync[0].method=INHERIT")
-                .run(context -> assertThat(context).hasFailed().getFailure()
-                        .hasRootCauseInstanceOf(InvalidProxyConfigurationException.class)
-                        .rootCause().hasMessageContaining("overlapping HTTP method"));
+        workflows().insertOne(Document.parse(CATCH_ALL));
+        workflows().insertOne(Document.parse(ORDERS));
+        workflows().insertOne(Document.parse(ORDERS.replace("\"orders\"", "\"orders-again\"")));
+
+        assertStartupFailsWith("overlapping HTTP method");
     }
 
     @Test
-    void failsToStartWithAnEmptyWorkflow() {
-        runner.withPropertyValues("proxy.workflows.catch-all.match.path=/**")
-                .run(context -> assertThat(context).hasFailed().getFailure()
-                        .hasRootCauseInstanceOf(InvalidProxyConfigurationException.class));
+    void failsToStartWithAWorkflowThatHasNoEndpoints() {
+        workflows().insertOne(Document.parse("{ \"_id\": \"catch-all\", \"match\": { \"path\": \"/**\" } }"));
+
+        assertStartupFailsWith("at least one endpoint");
+    }
+
+    private static void assertStartupFailsWith(String message) {
+        Throwable failure = null;
+        try (ConfigurableApplicationContext context = start()) {
+            // Starting must not succeed.
+        } catch (RuntimeException ex) {
+            failure = ex;
+        }
+        assertThat(failure).as("application startup").isNotNull();
+        assertThat(failure).hasRootCauseInstanceOf(InvalidWorkflowDefinitionException.class);
+        assertThat(failure).rootCause().hasMessageContaining(message);
+    }
+
+    private static ConfigurableApplicationContext start() {
+        return new SpringApplicationBuilder(AggregatorApplication.class)
+                .web(WebApplicationType.NONE)
+                .properties("spring.mongodb.uri=" + uri, "spring.main.banner-mode=off")
+                .run();
+    }
+
+    private static MongoCollection<Document> workflows() {
+        return client.getDatabase("startup-test").getCollection("workflows");
     }
 }

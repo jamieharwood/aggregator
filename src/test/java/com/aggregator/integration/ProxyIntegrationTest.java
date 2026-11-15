@@ -52,8 +52,8 @@ class ProxyIntegrationTest {
     private final HttpClient http = HttpClient.newHttpClient();
 
     @DynamicPropertySource
-    static void downstream(DynamicPropertyRegistry registry) {
-        registry.add("downstream.base-url", Downstream::baseUrl);
+    static void mongo(DynamicPropertyRegistry registry) {
+        registry.add("spring.mongodb.uri", WorkflowStore::uri);
     }
 
     @BeforeEach
@@ -237,7 +237,7 @@ class ProxyIntegrationTest {
         HttpResponse<String> unknown = http.send(HttpRequest.newBuilder(uri("/actuator/nope")).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
 
-        assertThat(health.statusCode()).isEqualTo(200);
+        assertThat(health.statusCode()).as(health.body()).isEqualTo(200);
         assertThat(health.body()).contains("UP");
         assertThat(unknown.statusCode()).isEqualTo(404);
         assertThat(Downstream.SERVER.getAllServeEvents()).isEmpty();

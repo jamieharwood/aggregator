@@ -1,62 +1,31 @@
 package com.aggregator.config;
 
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * Raw binding of the {@code proxy.*} configuration. Validation and conversion to the runtime
- * model happens in {@link com.aggregator.routing.WorkflowRegistry}.
+ * Application settings. Workflows themselves are not configured here: they are stored in MongoDB.
+ *
+ * @param connectTimeout TCP connect timeout for all downstream calls
  */
 @ConfigurationProperties("proxy")
-public record ProxyProperties(Map<String, WorkflowProperties> workflows) {
+public record ProxyProperties(Duration connectTimeout, WorkflowStore workflowStore) {
 
     public ProxyProperties {
-        workflows = workflows == null ? Map.of() : workflows;
+        connectTimeout = connectTimeout == null ? Duration.ofSeconds(2) : connectTimeout;
+        workflowStore = workflowStore == null ? new WorkflowStore(null, null) : workflowStore;
     }
 
-    public record WorkflowProperties(
-            MatchProperties match,
-            List<EndpointProperties> sync,
-            List<EndpointProperties> async,
-            AsyncFailureMode onAsyncFailure) {
+    /**
+     * @param collection the MongoDB collection holding one document per workflow
+     * @param refreshInterval how often workflows are reloaded; zero disables reloading
+     */
+    public record WorkflowStore(String collection, Duration refreshInterval) {
 
-        public WorkflowProperties {
-            sync = sync == null ? List.of() : sync;
-            async = async == null ? List.of() : async;
-            onAsyncFailure = onAsyncFailure == null ? AsyncFailureMode.PARTIAL : onAsyncFailure;
+        public WorkflowStore {
+            collection = collection == null || collection.isBlank() ? "workflows" : collection;
+            refreshInterval = refreshInterval == null ? Duration.ofSeconds(30) : refreshInterval;
         }
-    }
-
-    public record MatchProperties(String path, List<String> methods) {
-
-        public MatchProperties {
-            methods = methods == null ? List.of() : methods;
-        }
-    }
-
-    public record EndpointProperties(
-            String name,
-            String url,
-            String method,
-            Duration timeout,
-            Map<String, String> headers,
-            List<String> forwardHeaders,
-            boolean appendInboundPath) {
-
-        public EndpointProperties {
-            timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
-            headers = headers == null ? Map.of() : headers;
-            forwardHeaders = forwardHeaders == null ? List.of() : forwardHeaders;
-        }
-    }
-
-    public enum AsyncFailureMode {
-        /** Return 200 with every endpoint in the merged response; failed ones carry an error. */
-        PARTIAL,
-        /** Return 502 if any asynchronous endpoint fails. */
-        FAIL
     }
 }

@@ -13,13 +13,23 @@ named workflow, and the workflow calls one or more downstream endpoints:
 ## Requirements
 
 - JDK 25
-- Nothing else: the Gradle wrapper downloads Gradle 9.9.1.
+- MongoDB, which holds the workflow definitions
+- The Gradle wrapper downloads Gradle 9.9.1; the tests use an in-memory MongoDB and need no
+  running database.
 
 ## Build and run
 
 ```bash
 ./gradlew build
 ```
+
+Start MongoDB with the example workflows (also starts the tracing stack described below):
+
+```bash
+docker compose up -d
+```
+
+Then start the application:
 
 ```bash
 ./gradlew bootRun
@@ -31,17 +41,19 @@ Or run the jar:
 java -jar build/libs/aggregator-0.1.0.jar
 ```
 
-The application listens on port 8080 (`SERVER_PORT` overrides it). The workflows in
-`src/main/resources/application.yml` point at placeholder hosts (`*.internal`); replace them with
-your own, or supply your own file:
+The application listens on port 8080 (`SERVER_PORT` overrides it) and connects to
+`mongodb://localhost:27017/aggregator` (`MONGODB_URI` overrides it). The example workflows in
+`mongo/init-workflows.js` point at placeholder hosts (`*.internal`); replace them with your own.
+
+To load the example workflows into a MongoDB you run yourself:
 
 ```bash
-java -jar build/libs/aggregator-0.1.0.jar --spring.config.additional-location=file:./my-workflows.yml
+mongosh "mongodb://localhost:27017/aggregator" mongo/init-workflows.js
 ```
 
 ## Worked example
 
-With the `order-flow` workflow from `application.yml`:
+With the `order-flow` workflow from `mongo/init-workflows.js`:
 
 ```bash
 curl -i -X POST http://localhost:8080/api/orders/42 \
@@ -70,8 +82,8 @@ curl -i -X POST http://localhost:8080/api/orders/42 \
 | Workflow has an async stage | `200` with `{"results": {"<endpoint>": {"status", "body"}}}`, in configured order |
 | Workflow has only a sync stage | The last sync endpoint's status, content type and body, unchanged |
 | A sync endpoint fails | `502`; nothing further is called |
-| An async endpoint fails, `on-async-failure: partial` | `200`; the failed entry has `status` and `error` instead of `body` |
-| An async endpoint fails, `on-async-failure: fail` | `502` with `failedEndpoints` and the `results` gathered so far |
+| An async endpoint fails, `onAsyncFailure: "partial"` | `200`; the failed entry has `status` and `error` instead of `body` |
+| An async endpoint fails, `onAsyncFailure: "fail"` | `502` with `failedEndpoints` and the `results` gathered so far |
 
 A call fails if it returns a non-2xx status, exceeds its timeout, or cannot connect. A sync failure
 looks like this (`reason` is `failure` or `timeout`; `downstreamStatus` is `null` when no response
@@ -95,77 +107,110 @@ as a string; an empty body appears as `null`.
 Every response carries an `X-Correlation-Id` header. The value is taken from the inbound request, or
 generated if absent, and is sent to every downstream call.
 
-## Configuration reference
+## Workflow definitions
 
-All workflows live under `proxy.workflows` and are validated at startup; the application refuses to
-start on invalid configuration.
+Workflows are stored in MongoDB, in the `workflows` collection of the database named in the
+connection string. Each document is one workflow, and its `_id` is the workflow name.
 
-```yaml
-proxy:
-  connect-timeout: 2s             # TCP connect timeout for all downstream calls (default 2s)
-  workflows:
-    order-flow:                   # workflow name (the key); must be unique
-      match:
-        path: /api/orders/**      # Spring path pattern
-        methods: [POST]           # optional; omitted = all methods
-      sync:                       # list order = call order
-        - name: validate
-          url: https://validator.internal/validate
-          method: POST
-          timeout: 2s
-      async:
-        - name: billing
-          url: https://billing.internal/charge
-          method: POST
-          timeout: 5s
-      on-async-failure: partial   # partial (default) | fail
+```javascript
+{
+  _id: "order-flow",                // workflow name; unique by construction
+  match: {
+    path: "/api/orders/**",         // Spring path pattern
+    methods: ["POST"]               // optional; omitted = all methods
+  },
+  sync: [                           // array order = call order
+    { name: "validate", url: "https://validator.internal/validate", method: "POST", timeout: "2s" }
+  ],
+  async: [
+    { name: "billing", url: "https://billing.internal/charge", method: "POST", timeout: "5s" }
+  ],
+  onAsyncFailure: "partial"         // partial (default) | fail
+}
+```
 
-    catch-all:                    # mandatory
-      match:
-        path: /**
-      sync:
-        - name: default-backend
-          url: https://default.internal
-          method: INHERIT
-          append-inbound-path: true
-          timeout: 5s
+The mandatory catch-all:
+
+```javascript
+{
+  _id: "catch-all",
+  match: { path: "/**" },
+  sync: [
+    { name: "default-backend", url: "https://default.internal", method: "INHERIT",
+      appendInboundPath: true, timeout: "5s" }
+  ]
+}
+```
+
+### Loading and reloading
+
+- **Startup:** all workflows are read and validated. If the collection is empty, a workflow is
+  invalid, the catch-all is missing, or MongoDB cannot be reached, the application does not start.
+- **Reload:** the collection is re-read every 30 seconds (`proxy.workflow-store.refresh-interval`),
+  so added, changed and removed workflows take effect without a restart. Requests already in
+  progress finish on the workflow they started with.
+- **Invalid change:** the set of workflows is validated as a whole. If a reload finds anything
+  invalid, the whole reload is rejected, an error is logged, and the previously loaded workflows
+  stay in force until the data is fixed. The same applies if MongoDB is unreachable at reload time.
+
+Change a workflow with any MongoDB client, for example:
+
+```bash
+mongosh "mongodb://localhost:27017/aggregator" --eval \
+  'db.workflows.updateOne({_id: "order-flow"}, {$set: {"async.0.timeout": "10s"}})'
 ```
 
 ### Workflow
 
-| Property | Required | Description |
+| Field | Required | Description |
 | --- | --- | --- |
+| `_id` | yes | The workflow name; a non-empty string |
 | `match.path` | yes | Path pattern, e.g. `/api/orders/**` or `/api/orders/{id}` |
 | `match.methods` | no | HTTP methods matched. Omitted means all methods |
 | `sync` | no | Ordered list of endpoints called one after another |
 | `async` | no | Endpoints called concurrently |
-| `on-async-failure` | no | `partial` (default) or `fail` |
+| `onAsyncFailure` | no | `partial` (default) or `fail` |
 
 A workflow needs at least one endpoint across `sync` and `async`.
 
 ### Endpoint
 
-| Property | Required | Description |
+| Field | Required | Description |
 | --- | --- | --- |
 | `name` | yes | Unique within the workflow; the key in the merged response |
 | `url` | yes | Absolute `http` or `https` URL |
 | `method` | yes | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, or `INHERIT` to use the inbound request's method |
-| `timeout` | no | Upper bound for the whole call (default `5s`) |
+| `timeout` | no | Upper bound for the whole call: a string such as `"2s"` or `"500ms"`, or a number of milliseconds (default `5s`) |
 | `headers` | no | Static headers added to the call |
-| `forward-headers` | no | Names of inbound headers copied to the call. Nothing is forwarded unless listed |
-| `append-inbound-path` | no | `true` appends the inbound path and query string to `url` (default `false`) |
+| `forwardHeaders` | no | Names of inbound headers copied to the call. Nothing is forwarded unless listed |
+| `appendInboundPath` | no | `true` appends the inbound path and query string to `url` (default `false`) |
 
 `GET`, `HEAD` and `DELETE` calls are sent without a body.
 
 ### Matching rules
 
 - If several workflows match a request, the most specific path pattern wins.
-- Two workflows with the same path pattern and an overlapping method are rejected at startup. The
+- Two workflows with the same path pattern and an overlapping method are rejected. The
   same path with disjoint methods (one `GET`, one `POST`) is allowed.
 - Exactly one catch-all workflow (`match.path: /**`, no `match.methods`) is mandatory, so every
   request is served by a workflow. A request whose path matches a specific workflow but whose
   method does not falls through to the catch-all.
 - Actuator endpoints (`/actuator/**`) are never proxied.
+
+## Application settings
+
+Set in `application.yml` or by environment variable.
+
+| Setting | Environment variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `spring.mongodb.uri` | `MONGODB_URI` | `mongodb://localhost:27017/aggregator` | MongoDB connection string, including the database |
+| `proxy.workflow-store.collection` | | `workflows` | Collection holding the workflows |
+| `proxy.workflow-store.refresh-interval` | `WORKFLOW_REFRESH_INTERVAL` | `30s` | How often workflows are reloaded; `0` reads them once at startup |
+| `proxy.connect-timeout` | | `2s` | TCP connect timeout for all downstream calls |
+| `server.port` | `SERVER_PORT` | `8080` | HTTP port |
+
+`/actuator/health` includes MongoDB. If MongoDB becomes unreachable the application keeps serving
+with the workflows it has loaded, but health reports `DOWN`.
 
 ## Observability
 
@@ -221,13 +266,7 @@ export failure and carry on.
 
 ### Viewing a trace locally
 
-Start an OpenTelemetry collector and Jaeger:
-
-```bash
-docker compose up -d
-```
-
-Start the application, send a request, then open <http://localhost:16686>, choose the `aggregator`
+`docker compose up -d` also starts an OpenTelemetry collector and Jaeger. Start the application, send a request, then open <http://localhost:16686>, choose the `aggregator`
 service and select **Find Traces**. Metrics are printed to the collector's log:
 
 ```bash
@@ -240,11 +279,16 @@ docker compose logs -f otel-collector
 ./gradlew test
 ```
 
-- `WorkflowRegistryTest`: matching, specificity and configuration validation.
+- `WorkflowTableTest`: matching, specificity and validation of workflow definitions.
+- `WorkflowRegistryTest`, `WorkflowRefresherTest`: loading, reloading and rejecting invalid changes.
+- `MongoWorkflowDefinitionRepositoryTest`: reading workflow documents from MongoDB.
 - `WorkflowExecutorTest`: the executor against a fake downstream, with no web context.
 - `ProxyIntegrationTest`: the running application against WireMock.
 - `TracingIntegrationTest`: span structure, using an in-memory span exporter.
-- `StartupValidationTest`: invalid configuration stops the application context from starting.
+- `WorkflowReloadIntegrationTest`: changes in MongoDB take effect in the running application.
+- `StartupValidationTest`: invalid stored workflows stop the application from starting.
+
+The MongoDB tests run against an in-memory MongoDB (`mongo-java-server`), not a real server.
 
 ## Design notes
 

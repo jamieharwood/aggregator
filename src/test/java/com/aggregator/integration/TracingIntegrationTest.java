@@ -55,8 +55,8 @@ class TracingIntegrationTest {
     }
 
     @DynamicPropertySource
-    static void downstream(DynamicPropertyRegistry registry) {
-        registry.add("downstream.base-url", Downstream::baseUrl);
+    static void mongo(DynamicPropertyRegistry registry) {
+        registry.add("spring.mongodb.uri", WorkflowStore::uri);
     }
 
     @BeforeEach
